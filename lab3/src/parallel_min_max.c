@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
 
             if (quan != 1) {
                 printf("Не удалось прочитать данные из файла %s\n", filename);
-                return -;
+                return 1;
             }
 
             if (min_max.min > pipe_buffer.min) min_max.min = pipe_buffer.min;
