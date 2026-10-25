@@ -132,6 +132,9 @@ int main(int argc, char** argv) {
             argv[0]);
         return 1;
     }
+    
+    // Ставим таймаут
+    if (timeout > 0) alarm(timeout);
 
     int* array = malloc(sizeof(int) * array_size);
     GenerateArray(array, array_size, seed);
@@ -207,7 +210,10 @@ int main(int argc, char** argv) {
 
                 }
                 else {
-                    close(pipes[i][0]); //Сразу закрываем дескриптор чтения, т.к. в клоне он не нужен (в клоне только пишем)
+                    for (int j = 0; j < pnum; j++) {
+                        close(pipes[j][0]); // Закрываем дескрипотры чтения у всех процессов, кроме текущего
+                        if (j != i) close(pipes[j][1]); // Закрываем дескрипотры записи у всех процессов, кроме текущего
+                    }
 
                     if (write(pipes[i][1], &buffer, sizeof(struct MinMax)) < 0) {
                         printf("Ошибка при записи данных в pipe");
@@ -215,6 +221,8 @@ int main(int argc, char** argv) {
                     }
 
                     close(pipes[i][1]); // Закрываем дескриптор записи
+
+                    free(GLOBAL_PIDS);
                     free(pipes);
                 }
 
@@ -234,20 +242,16 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Ставим таймаут
-    if (timeout > 0) alarm(timeout);
-
     while (active_child_processes > 0) {
         pid_t wp = wait(NULL);
 
-        // Если wait(NULL) был прерван таймаутом
+        // Если wait(NULL) был прерван не таймаутом
         if (wp < 0) {
             continue; 
         }
 
         active_child_processes -= 1;
     }
-
     // Начало блока считывания данных
 
     struct MinMax min_max;
@@ -272,6 +276,7 @@ int main(int argc, char** argv) {
 
             size_t quan = fread(&pipe_buffer, sizeof(struct MinMax), 1, f); // В quan должно быть 1, т.к. прочитали ровно 1 структуру
             fclose(f); 
+            remove(filename);
 
             if (quan != 1) {
                 printf("Не удалось прочитать данные из файла %s\n", filename);
@@ -301,8 +306,10 @@ int main(int argc, char** argv) {
     struct timeval finish_time;
     gettimeofday(&finish_time, NULL);
 
-    double elapsed_time = (finish_time.tv_sec - start_time.tv_sec) * 1000.0;
-    elapsed_time += (finish_time.tv_usec - start_time.tv_usec) / 1000.0;
+    double start_total_ms = ((double)start_time.tv_sec * 1000.0) + ((double)start_time.tv_usec / 1000.0);
+    double finish_total_ms = ((double)finish_time.tv_sec * 1000.0) + ((double)finish_time.tv_usec / 1000.0);
+
+    double elapsed_time = finish_total_ms - start_total_ms;
 
     if (!with_files) free(pipes);
     free(array);
