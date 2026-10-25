@@ -15,11 +15,31 @@
 #include "find_min_max.h"
 #include "utils.h"
 
+int GLOBAL_PNUM;
+pid_t* GLOBAL_PIDS;
+
+void my_handler(int signal) {
+
+    // Если пришел сигнал от таймера
+    if (signal == SIGALRM) {
+        for (int i = 0; i < GLOBAL_PNUM; i++) {
+            if (GLOBAL_PIDS[i] > 0) kill(GLOBAL_PIDS[i], SIGKILL);
+        }
+        
+        // Завершаем родительский процесс
+        _exit(1);
+    }
+}
+
 int main(int argc, char** argv) {
     int seed = -1;
     int array_size = -1;
     int pnum = -1;
+    int timeout = -1;
+
     bool with_files = false;
+
+    signal(SIGALRM, my_handler);
 
     while (true) {
         int current_optind = optind ? optind : 1;
@@ -27,6 +47,7 @@ int main(int argc, char** argv) {
         static struct option options[] = { {"seed", required_argument, 0, 0},
                                           {"array_size", required_argument, 0, 0},
                                           {"pnum", required_argument, 0, 0},
+                                          {"timeout", required_argument, 0, 0},
                                           {"by_files", no_argument, 0, 'f'},
                                           {0, 0, 0, 0} };
 
@@ -73,6 +94,14 @@ int main(int argc, char** argv) {
                 break;
 
             case 3:
+                timeout = atoi(optarg);
+                
+                if (timeout == 0) {
+                    printf("timeout parameter must be number and > 0!");
+                    return 1;
+                }
+                break;
+            case 4:
                 with_files = true;
                 break;
 
@@ -106,7 +135,12 @@ int main(int argc, char** argv) {
 
     int* array = malloc(sizeof(int) * array_size);
     GenerateArray(array, array_size, seed);
+
+    //Будем хранить все pid`ы в глобальном массиве
+    GLOBAL_PIDS = malloc(sizeof(pid_t) * pnum);
+    
     int active_child_processes = 0;
+    GLOBAL_PNUM = pnum;
 
     struct timeval start_time;
     gettimeofday(&start_time, NULL);
@@ -137,9 +171,6 @@ int main(int argc, char** argv) {
         pid_t child_pid = fork();
         if (child_pid >= 0) {
             // successful fork
-            buffer.min = INT_MAX;
-            buffer.max = INT_MIN;
-
             active_child_processes += 1;
 
             // Если сейчас работает клон, а не родитель
@@ -155,10 +186,7 @@ int main(int argc, char** argv) {
                     end = start + part;
                 }
 
-                for (int j = start; j < end; j++) {
-                    if (array[j] < buffer.min) buffer.min = array[j];
-                    if (array[j] > buffer.max) buffer.max = array[j];
-                }
+                buffer = GetMinMax(array, start, end);
 
                 // Начало блока обмена данными
                 if (with_files) {
@@ -195,6 +223,7 @@ int main(int argc, char** argv) {
             }
 
             else {
+                GLOBAL_PIDS[i] = child_pid;
                 if (!with_files) close(pipes[i][1]); //Если это родитель, то закрываем дексриптор записи
             }
 
@@ -205,8 +234,16 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Ставим таймаут
+    if (timeout > 0) alarm(timeout);
+
     while (active_child_processes > 0) {
-        wait(NULL);
+        pid_t wp = wait(NULL);
+
+        // Если wait(NULL) был прерван таймаутом
+        if (wp < 0) {
+            continue; 
+        }
 
         active_child_processes -= 1;
     }
@@ -234,9 +271,7 @@ int main(int argc, char** argv) {
             }
 
             size_t quan = fread(&pipe_buffer, sizeof(struct MinMax), 1, f); // В quan должно быть 1, т.к. прочитали ровно 1 структуру
-
-            fclose(f);
-            //remove(filename); 
+            fclose(f); 
 
             if (quan != 1) {
                 printf("Не удалось прочитать данные из файла %s\n", filename);
@@ -271,10 +306,12 @@ int main(int argc, char** argv) {
 
     if (!with_files) free(pipes);
     free(array);
+    free(GLOBAL_PIDS);
 
     printf("Min: %d\n", min_max.min);
     printf("Max: %d\n", min_max.max);
     printf("Elapsed time: %fms\n", elapsed_time);
+
     fflush(NULL);
     return 0;
 }

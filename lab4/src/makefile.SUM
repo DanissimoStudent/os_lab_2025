@@ -1,0 +1,9 @@
+CC=gcc
+CFLAGS=-I.
+LDFLAGS = -pthread
+
+parallel_sum: utils.o
+	$(CC) -o parallel_sum utils.o parallel_sum.c $(CFLAGS) $(LDFLAGS)
+
+utils.o : utils.h
+	$(CC) -o utils.o -c utils.c $(CFLAGS)
