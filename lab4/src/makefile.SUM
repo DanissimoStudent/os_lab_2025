@@ -1,9 +1,20 @@
 CC=gcc
 CFLAGS=-I.
+LIBFLAGS= -c -fPIC
 LDFLAGS = -pthread
 
-parallel_sum: utils.o
-	$(CC) -o parallel_sum utils.o parallel_sum.c $(CFLAGS) $(LDFLAGS)
+parallel_sum: parallel_sum.o utils.o dynamic_sum.so
+	$(CC) parallel_sum.o utils.o dynamic_sum.so -o parallel_sum $(CFLAGS)
 
-utils.o : utils.h
+parallel_sum.o: parallel_sum.c
+	$(CC) -c parallel_sum.c -o parallel_sum.o $(CFLAGS)
+
+dynamic_sum.so: dynamic_sum.o
+	$(CC) -shared dynamic_sum.o -o dynamic_sum.so $(CFLAGS)
+
+dynamic_sum.o: dynamic_sum.c
+	$(CC) $(LIBFLAGS) dynamic_sum.c -o dynamic_sum.o $(CFLAGS)
+
+utils.o : utils.c utils.h
 	$(CC) -o utils.o -c utils.c $(CFLAGS)
+ 
