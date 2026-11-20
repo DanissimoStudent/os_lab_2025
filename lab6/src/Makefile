@@ -5,10 +5,10 @@ LIB=-L. -Wl,-rpath,'$$ORIGIN'
 
 all: client server libutils.so
 
-client : client.c libutils.so utils.h utils.c
+client : client.c libutils.so utils.h
 	$(CC) -o client client.c $(LIB) -lutils $(POSIX) $(CFLAGS)
 
-server : server.c libutils.so utils.h utils.c
+server : server.c libutils.so utils.h
 	$(CC) -o server server.c $(LIB) -lutils $(POSIX) $(CFLAGS)
 
 libutils.so: utils.h utils.c
