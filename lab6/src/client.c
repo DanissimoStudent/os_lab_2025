@@ -12,6 +12,12 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#include "pthread.h"
+
+uint64_t total_result = 1;
+uint64_t global_mod = 1;
+pthread_mutex_t result_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 struct Server {
   char ip[255];
   int port;
@@ -45,10 +51,94 @@ bool ConvertStringToUI64(const char *str, uint64_t *val) {
   return true;
 }
 
+int readServersData(const char* filename, struct Server **to) {
+  FILE *fp = fopen(filename, "r");
+  if (fp == NULL) {
+      printf("Cannot open servers file");
+      return -1;
+  }
+
+  int counter = -1;
+  int idx = 0;
+  char line[255];
+
+  while (fgets(line, sizeof(line), fp) != NULL) {
+    line[strcspn(line, "\r\n")] = '\0';
+
+    if (counter == -1) {
+      counter = atoi(line);
+      if (counter <= 0) {
+          fclose(fp);
+          printf("servers counter must be > 0!");
+          return -1;
+      }
+
+      *to = malloc(sizeof(struct Server) * counter);
+    }
+    else if (idx < counter) {
+      char *colon = strchr(line, ':');
+      if (colon != NULL) {
+          *colon = '\0';
+          strncpy((*to)[idx].ip, line, sizeof((*to)[idx].ip) - 1);
+          
+          (*to)[idx].ip[sizeof((*to)[idx].ip) - 1] = '\0';
+          (*to)[idx].port = atoi(colon + 1);
+          
+          idx++;
+      }
+    }
+  }
+
+  fclose(fp);
+  return counter;
+}
+
+typedef struct{
+    uint64_t start;
+    uint64_t end;
+    int socket;
+
+} thread_data_t;
+
+void* calculate_factorial(void *arg) {
+    thread_data_t *data = (thread_data_t*)arg;
+
+    int sck = data->socket;
+    uint64_t begin = data->start;
+    uint64_t end = data->end;
+
+    char task[sizeof(uint64_t) * 3];
+    memcpy(task, &begin, sizeof(uint64_t));
+    memcpy(task + sizeof(uint64_t), &end, sizeof(uint64_t));
+    memcpy(task + 2 * sizeof(uint64_t), &global_mod, sizeof(uint64_t));
+
+    if (send(sck, task, sizeof(task), 0) < 0) {
+      fprintf(stderr, "Send failed\n");
+      exit(1);
+    }
+
+    char response[sizeof(uint64_t)];
+    if (recv(sck, response, sizeof(response), 0) < 0) {
+      fprintf(stderr, "Recieve failed\n");
+      exit(1);
+    }
+
+    uint64_t answer = 0;
+    memcpy(&answer, response, sizeof(uint64_t));
+
+    close(sck);
+
+    pthread_mutex_lock(&result_mutex);
+    total_result = MultModulo(total_result, answer, global_mod);
+    pthread_mutex_unlock(&result_mutex);
+
+    return NULL;
+}
+
 int main(int argc, char **argv) {
   uint64_t k = -1;
   uint64_t mod = -1;
-  char servers[255] = {'\0'}; // TODO: explain why 255
+  char servers[255] = {'\0'}; //255, т.к. в большинстве систем макисальная длина пути к файлу не может превышать 255 символов
 
   while (true) {
     int current_optind = optind ? optind : 1;
@@ -69,14 +159,29 @@ int main(int argc, char **argv) {
       switch (option_index) {
       case 0:
         ConvertStringToUI64(optarg, &k);
-        // TODO: your code here
+        
+        if (k <= 0) {
+          printf("k parameter must be > 0!\n");
+          return 1;
+        }
+
         break;
       case 1:
         ConvertStringToUI64(optarg, &mod);
-        // TODO: your code here
+        
+        if (mod <= 0) {
+          printf("mod parameter must be > 0!\n");
+          return 1;
+        }
+
         break;
       case 2:
-        // TODO: your code here
+
+        if (strlen(optarg) == 0) {
+          printf("servers parameter must not be empty!\n");
+          return 1;
+        }
+
         memcpy(servers, optarg, strlen(optarg));
         break;
       default:
@@ -93,22 +198,25 @@ int main(int argc, char **argv) {
   }
 
   if (k == -1 || mod == -1 || !strlen(servers)) {
-    fprintf(stderr, "Using: %s --k 1000 --mod 5 --servers /path/to/file\n",
+    fprintf(stderr, "Using: %s --k 40 --mod 5 --servers ./servers_data.txt\n",
             argv[0]);
     return 1;
   }
+  global_mod = mod;
+  struct Server *to = NULL;
+  unsigned int servers_num = readServersData(servers, &to);
 
-  // TODO: for one server here, rewrite with servers from file
-  unsigned int servers_num = 1;
-  struct Server *to = malloc(sizeof(struct Server) * servers_num);
-  // TODO: delete this and parallel work between servers
-  to[0].port = 20001;
-  memcpy(to[0].ip, "127.0.0.1", sizeof("127.0.0.1"));
+  pthread_t *threads = malloc(servers_num * sizeof(pthread_t));
+  thread_data_t *threads_data = malloc(servers_num * sizeof(thread_data_t));
 
-  // TODO: work continiously, rewrite to make parallel
-  for (int i = 0; i < servers_num; i++) {
-    struct hostent *hostname = gethostbyname(to[i].ip);
-    if (hostname == NULL) {
+  uint64_t base_range = k / servers_num;
+  uint64_t ostatok = k % servers_num;
+  uint64_t current_start = 1;
+
+  // Т.к. gethostbyname() непотокобезопасный, то выносим заполнение этой структуры в обычный последовательный цикл
+  for (uint64_t i = 0; i < servers_num; i++) {
+      struct hostent *hostname = gethostbyname(to[i].ip);
+      if (hostname == NULL) {
       fprintf(stderr, "gethostbyname failed with %s\n", to[i].ip);
       exit(1);
     }
@@ -129,36 +237,35 @@ int main(int argc, char **argv) {
       exit(1);
     }
 
-    // TODO: for one server
-    // parallel between servers
-    uint64_t begin = 1;
-    uint64_t end = k;
-
-    char task[sizeof(uint64_t) * 3];
-    memcpy(task, &begin, sizeof(uint64_t));
-    memcpy(task + sizeof(uint64_t), &end, sizeof(uint64_t));
-    memcpy(task + 2 * sizeof(uint64_t), &mod, sizeof(uint64_t));
-
-    if (send(sck, task, sizeof(task), 0) < 0) {
-      fprintf(stderr, "Send failed\n");
-      exit(1);
+    threads_data[i].start = current_start;
+    threads_data[i].end = current_start + base_range - 1;
+    threads_data[i].socket = sck;
+    
+    // Равномерно распределяем остаток, если k % servers_num != 0
+    if (ostatok > 0) {
+        threads_data[i].end++;
+        ostatok--;
     }
 
-    char response[sizeof(uint64_t)];
-    if (recv(sck, response, sizeof(response), 0) < 0) {
-      fprintf(stderr, "Recieve failed\n");
-      exit(1);
+    current_start = threads_data[i].end + 1;
+
+    if (pthread_create(&threads[i], NULL, calculate_factorial, &threads_data[i]) != 0) {
+        printf("ERROR: thread not create!\n");
+        return 1;
     }
-
-    // TODO: from one server
-    // unite results
-    uint64_t answer = 0;
-    memcpy(&answer, response, sizeof(uint64_t));
-    printf("answer: %llu\n", answer);
-
-    close(sck);
   }
+  for (uint32_t i = 0; i < servers_num; i++) {
+      if (pthread_join(threads[i], NULL) != 0) {
+          printf("ERROR: thread not join");
+          return 1;
+      }
+  }
+  
+  printf("Факториал числа %lu по модулю %lu равен %lu\n", k, mod, total_result);
+
   free(to);
+  free(threads);
+  free(threads_data);
 
   return 0;
 }
